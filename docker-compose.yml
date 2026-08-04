@@ -1,0 +1,27 @@
+services:
+  jockiefluxer:
+    build: .
+    image: jockiefluxer:latest
+    container_name: jockiefluxer
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Saved playlists, favourites and per-server settings.
+      - ./data:/app/data
+      # Optional: YouTube cookies for age-gated tracks.
+      # - ./cookies.txt:/config/cookies.txt:ro
+
+  # Jockie users are used to running Jockie Music 2, 3, … alongside the first
+  # so several parties can listen to different things. Each extra instance is
+  # a separate bot account with its own token, prefix and data volume.
+  #
+  # jockiefluxer-2:
+  #   build: .
+  #   image: jockiefluxer:latest
+  #   container_name: jockiefluxer-2
+  #   restart: unless-stopped
+  #   env_file: .env.second
+  #   environment:
+  #     BOT_PREFIX: "mm!"
+  #   volumes:
+  #     - ./data-2:/app/data

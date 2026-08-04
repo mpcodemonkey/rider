@@ -1,0 +1,321 @@
+"""yt-dlp backed source.
+
+Handles YouTube, SoundCloud, Bandcamp, Vimeo, Twitch, direct audio links and
+anything else yt-dlp knows about, plus text search and YouTube-mix based
+autoplay.
+
+All yt-dlp work happens on a worker thread — the library is entirely
+synchronous and a cold YouTube extraction can take seconds.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any
+
+from ..config import Config
+from ..track import LoadResult, Track
+from ..utils import is_url
+
+log = logging.getLogger(__name__)
+
+# Extractors whose "duration" is meaningless / infinite.
+_LIVE_KEYS = ("is_live", "live_status")
+
+
+class YTDLPError(RuntimeError):
+    """Raised when yt-dlp could not produce anything playable."""
+
+
+class _ErrorCapture:
+    """A yt-dlp logger that keeps the last error instead of printing it.
+
+    ``ignoreerrors`` is on so that one dead video doesn't sink a 200-track
+    playlist, but that also makes ``extract_info`` return ``None`` on hard
+    failures.  Capturing the message lets the bot say *why* rather than
+    reporting a bare "nothing found".
+    """
+
+    def __init__(self) -> None:
+        self.last_error: str | None = None
+
+    def debug(self, message: str) -> None:
+        pass
+
+    def info(self, message: str) -> None:
+        pass
+
+    def warning(self, message: str) -> None:
+        log.debug("yt-dlp: %s", message)
+
+    def error(self, message: str) -> None:
+        self.last_error = str(message).replace("ERROR: ", "").strip()
+        log.debug("yt-dlp error: %s", self.last_error)
+
+
+class YTDLPSource:
+    """Thin async wrapper around ``yt_dlp.YoutubeDL``."""
+
+    name = "ytdlp"
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+        self._flat_opts = self._build_opts(flat=True)
+        self._full_opts = self._build_opts(flat=False)
+
+    # ------------------------------------------------------------------
+    # Setup
+    # ------------------------------------------------------------------
+    def _build_opts(self, *, flat: bool) -> dict[str, Any]:
+        opts: dict[str, Any] = {
+            "format": self.config.ytdlp_format,
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+            "skip_download": True,
+            "ignoreerrors": True,
+            "no_color": True,
+            "cachedir": False,
+            "retries": 3,
+            "socket_timeout": 20,
+            "geo_bypass": True,
+            "default_search": self.config.search_provider,
+            # Playlists are flattened so a 500-track playlist costs one request.
+            "extract_flat": "in_playlist" if flat else False,
+            "playlistend": self.config.playlist_limit,
+            # Audio-only clients avoid a lot of throttled formats on YouTube.
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+        }
+        if self.config.ytdlp_cookiefile:
+            opts["cookiefile"] = self.config.ytdlp_cookiefile
+        if self.config.ytdlp_proxy:
+            opts["proxy"] = self.config.ytdlp_proxy
+        return opts
+
+    def _extract_sync(
+        self, query: str, *, flat: bool
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        from yt_dlp import YoutubeDL  # imported lazily so --help works without it
+
+        capture = _ErrorCapture()
+        opts = {**(self._flat_opts if flat else self._full_opts), "logger": capture}
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+        return info, capture.last_error
+
+    async def _extract(
+        self, query: str, *, flat: bool
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Extract metadata. Returns ``(info, error_message)``."""
+        return await asyncio.to_thread(self._extract_sync, query, flat=flat)
+
+    # ------------------------------------------------------------------
+    # Parsing
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_live(info: dict[str, Any]) -> bool:
+        for key in _LIVE_KEYS:
+            value = info.get(key)
+            if value is True or value == "is_live":
+                return True
+        return False
+
+    @staticmethod
+    def _thumbnail(info: dict[str, Any]) -> str | None:
+        if info.get("thumbnail"):
+            return info["thumbnail"]
+        thumbnails = info.get("thumbnails") or []
+        if thumbnails:
+            return thumbnails[-1].get("url")
+        return None
+
+    @staticmethod
+    def _webpage_url(info: dict[str, Any]) -> str | None:
+        url = info.get("webpage_url") or info.get("original_url")
+        if url:
+            return url
+        # Flat playlist entries only carry an id plus an ie_key.
+        video_id = info.get("id")
+        if video_id and info.get("ie_key") in ("Youtube", "YoutubeTab"):
+            return f"https://www.youtube.com/watch?v={video_id}"
+        return info.get("url")
+
+    def _make_track(self, info: dict[str, Any], *, flat: bool) -> Track | None:
+        if not info:
+            return None
+        # yt-dlp reports durations in (possibly fractional) seconds.
+        raw_duration = info.get("duration")
+        duration = int(float(raw_duration) * 1000) if raw_duration else None
+        webpage_url = self._webpage_url(info)
+        is_live = self._is_live(info)
+
+        track = Track(
+            title=info.get("title") or info.get("id") or "Unknown track",
+            url=webpage_url,
+            duration=None if is_live else duration,
+            uploader=info.get("uploader") or info.get("channel") or info.get("artist"),
+            thumbnail=self._thumbnail(info),
+            source=(info.get("extractor_key") or info.get("ie_key") or "ytdlp").lower(),
+            is_live=is_live,
+            resolve_query=webpage_url or info.get("id"),
+        )
+        if not flat:
+            stream_url = self._pick_stream_url(info)
+            if stream_url:
+                track.mark_resolved(stream_url)
+        if not track.resolve_query:
+            return None
+        return track
+
+    @staticmethod
+    def _pick_stream_url(info: dict[str, Any]) -> str | None:
+        """Pull a directly playable URL out of a full extraction result."""
+        if info.get("url"):
+            return info["url"]
+        requested = info.get("requested_formats") or []
+        for fmt in requested:
+            if fmt.get("acodec") not in (None, "none") and fmt.get("url"):
+                return fmt["url"]
+        # Fall back to the best audio-bearing format yt-dlp knows about.
+        formats = info.get("formats") or []
+        audio_only = [
+            fmt
+            for fmt in formats
+            if fmt.get("acodec") not in (None, "none")
+            and fmt.get("vcodec") in (None, "none")
+            and fmt.get("url")
+        ]
+        pool = audio_only or [
+            fmt
+            for fmt in formats
+            if fmt.get("acodec") not in (None, "none") and fmt.get("url")
+        ]
+        if not pool:
+            return None
+        return max(pool, key=lambda fmt: fmt.get("abr") or fmt.get("tbr") or 0)["url"]
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    async def load(self, query: str) -> LoadResult:
+        """Resolve a URL or a search phrase into a :class:`LoadResult`."""
+        target = query if is_url(query) else f"{self.config.search_provider}1:{query}"
+        try:
+            info, error = await self._extract(target, flat=True)
+        except Exception as exc:  # yt-dlp raises a wide variety of errors
+            log.warning("yt-dlp failed to load %r: %s", query, exc)
+            return LoadResult.failed(str(exc).replace("ERROR: ", ""))
+
+        if not info:
+            # Distinguish "the site said no" from "there were no results".
+            return LoadResult.failed(error) if error else LoadResult.empty()
+
+        entries = info.get("entries")
+        if entries is None:
+            track = self._make_track(info, flat=False)
+            return LoadResult.track(track) if track else LoadResult.empty()
+
+        tracks = [
+            track
+            for track in (self._make_track(entry, flat=True) for entry in entries if entry)
+            if track is not None
+        ]
+        if not tracks:
+            return LoadResult.empty()
+
+        # A search returns a synthetic playlist; treat single hits as a track.
+        if not is_url(query):
+            return LoadResult.track(tracks[0])
+        if len(tracks) == 1 and not info.get("title"):
+            return LoadResult.track(tracks[0])
+
+        return LoadResult.playlist(
+            tracks,
+            name=info.get("title") or "Playlist",
+            url=info.get("webpage_url") or (query if is_url(query) else None),
+        )
+
+    async def search(self, query: str, limit: int = 10) -> list[Track]:
+        """Return up to ``limit`` search candidates for the ``search`` command."""
+        target = f"{self.config.search_provider}{limit}:{query}"
+        try:
+            info, _ = await self._extract(target, flat=True)
+        except Exception as exc:
+            log.warning("yt-dlp search failed for %r: %s", query, exc)
+            return []
+        if not info:
+            return []
+        entries = info.get("entries") or []
+        return [
+            track
+            for track in (self._make_track(entry, flat=True) for entry in entries if entry)
+            if track is not None
+        ]
+
+    async def resolve_stream(self, track: Track) -> str:
+        """Fill in (or refresh) a track's direct stream URL."""
+        query = track.resolve_query or track.url
+        if not query:
+            raise YTDLPError(f"No way to resolve '{track.title}'.")
+
+        target = query if is_url(query) else f"{self.config.search_provider}1:{query}"
+        info, error = await self._extract(target, flat=False)
+        if info and info.get("entries"):
+            entries = [entry for entry in info["entries"] if entry]
+            info = entries[0] if entries else None
+        if not info:
+            raise YTDLPError(error or f"Could not resolve '{track.title}'.")
+
+        stream_url = self._pick_stream_url(info)
+        if not stream_url:
+            raise YTDLPError(f"No playable audio stream for '{track.title}'.")
+
+        # Backfill metadata that a flat playlist entry never carried.
+        if not track.duration and info.get("duration"):
+            track.duration = int(float(info["duration"]) * 1000)
+        if not track.thumbnail:
+            track.thumbnail = self._thumbnail(info)
+        if not track.uploader:
+            track.uploader = info.get("uploader") or info.get("channel")
+        if not track.url:
+            track.url = self._webpage_url(info)
+        track.is_live = track.is_live or self._is_live(info)
+
+        track.mark_resolved(stream_url)
+        return stream_url
+
+    async def related(self, track: Track, exclude: set[str]) -> Track | None:
+        """Pick a follow-up track for autoplay using YouTube's mix radio."""
+        video_id = self._youtube_id(track)
+        if not video_id:
+            return None
+
+        radio = f"https://www.youtube.com/watch?v={video_id}&list=RD{video_id}"
+        try:
+            info, _ = await self._extract(radio, flat=True)
+        except Exception as exc:
+            log.debug("autoplay lookup failed: %s", exc)
+            return None
+        if not info:
+            return None
+
+        for entry in info.get("entries") or []:
+            if not entry:
+                continue
+            candidate = self._make_track(entry, flat=True)
+            if candidate is None or candidate.url in exclude:
+                continue
+            if self._youtube_id(candidate) == video_id:
+                continue
+            return candidate
+        return None
+
+    @staticmethod
+    def _youtube_id(track: Track) -> str | None:
+        url = track.url or track.resolve_query or ""
+        if "youtube.com/watch" in url and "v=" in url:
+            return url.split("v=")[1].split("&")[0]
+        if "youtu.be/" in url:
+            return url.split("youtu.be/")[1].split("?")[0]
+        return None
