@@ -294,3 +294,55 @@ def test_cookiefile_is_only_set_when_configured(ytdlp, config):
     config.ytdlp_cookiefile = "/config/cookies.txt"
     ytdlp = YTDLPSource(config)
     assert ytdlp._build_opts(flat=False)["cookiefile"] == "/config/cookies.txt"
+
+
+# ---------------------------------------------------------------------------
+# Cookiefile diagnostics
+# ---------------------------------------------------------------------------
+from jockiefluxer.sources.ytdlp import diagnose_cookiefile  # noqa: E402
+
+
+def test_diagnose_missing_file_names_the_configured_path(tmp_path):
+    warnings = diagnose_cookiefile(str(tmp_path / "does-not-exist.txt"))
+    assert len(warnings) == 1
+    assert "no file exists" in warnings[0]
+
+
+def test_diagnose_empty_file(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text("")
+    assert "is empty" in diagnose_cookiefile(str(path))[0]
+
+
+def test_diagnose_json_export_is_flagged(tmp_path):
+    """A common mistake: exporting JSON cookies instead of Netscape format."""
+    path = tmp_path / "cookies.txt"
+    path.write_text('[{"name": "SID", "value": "x", "domain": ".youtube.com"}]')
+    warnings = diagnose_cookiefile(str(path))
+    assert "JSON" in warnings[0]
+
+
+def test_diagnose_comments_only_file(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text("# Netscape HTTP Cookie File\n# This file was generated\n\n")
+    assert "no cookie entries" in diagnose_cookiefile(str(path))[0]
+
+
+def test_diagnose_flags_missing_youtube_cookies(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".google.com\tTRUE\t/\tTRUE\t0\tNID\tabc123\n"
+    )
+    warnings = diagnose_cookiefile(str(path))
+    assert "no youtube.com cookies" in warnings[0]
+
+
+def test_diagnose_valid_netscape_cookiefile_has_no_warnings(tmp_path):
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\txyz789\n"
+    )
+    assert diagnose_cookiefile(str(path)) == []

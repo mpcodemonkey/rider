@@ -44,6 +44,32 @@ def _check_dependencies(config: Config) -> None:
         raise SystemExit("yt-dlp is missing. Install it with:\n    pip install yt-dlp") from exc
 
 
+def _check_cookiefile(config: Config) -> None:
+    """Log whether YouTube cookies are actually wired in.
+
+    Mounting cookies.txt into the container and pointing YTDLP_COOKIEFILE at
+    it are two separate steps — this makes it obvious in the startup log
+    when only one of them happened, instead of that surfacing later as an
+    unexplained "Sign in to confirm you're not a bot".
+    """
+    if not config.ytdlp_cookiefile:
+        log.info(
+            "YTDLP_COOKIEFILE is not set — YouTube requests are unauthenticated. "
+            "If you start seeing 'Sign in to confirm you're not a bot', this is "
+            "the first thing to fix."
+        )
+        return
+
+    from .sources.ytdlp import diagnose_cookiefile
+
+    warnings = diagnose_cookiefile(config.ytdlp_cookiefile)
+    if warnings:
+        for warning in warnings:
+            log.warning(warning)
+    else:
+        log.info("YTDLP_COOKIEFILE found and looks valid: %s", config.ytdlp_cookiefile)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="jockiefluxer",
@@ -70,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
 
     log.info("Starting jockiefluxer %s", __version__)
     log.info("API: %s", config.api_url or "https://api.fluxer.app/v1 (default)")
+    _check_cookiefile(config)
 
     bot = MusicBot(config)
     try:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from ..config import Config
@@ -26,6 +27,65 @@ _LIVE_KEYS = ("is_live", "live_status")
 
 class YTDLPError(RuntimeError):
     """Raised when yt-dlp could not produce anything playable."""
+
+
+def diagnose_cookiefile(path: str) -> list[str]:
+    """Sanity-check a configured YTDLP_COOKIEFILE, without validating yt-dlp
+    would actually accept it (yt-dlp does that itself when it loads).
+
+    This exists because a misconfigured cookiefile fails *silently*: yt-dlp
+    just runs unauthenticated and YouTube's response looks identical to any
+    other "Sign in to confirm you're not a bot" block. Mounting the file into
+    the container and pointing YTDLP_COOKIEFILE at it are two separate steps,
+    and it's easy to do one without the other — this turns that mistake into
+    a log line instead of a mystery.
+    """
+    warnings: list[str] = []
+    file_path = Path(path)
+
+    if not file_path.is_file():
+        warnings.append(
+            f"YTDLP_COOKIEFILE is set to '{path}' but no file exists there. "
+            "If you're running in Docker, check the volume mount in "
+            "docker-compose.yml is uncommented and points at the same path."
+        )
+        return warnings
+
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        warnings.append(f"YTDLP_COOKIEFILE at '{path}' could not be read: {exc}")
+        return warnings
+
+    stripped = text.strip()
+    if not stripped:
+        warnings.append(f"YTDLP_COOKIEFILE at '{path}' is empty.")
+        return warnings
+
+    if stripped.startswith("{") or stripped.startswith("["):
+        warnings.append(
+            f"YTDLP_COOKIEFILE at '{path}' looks like JSON, not the Netscape format "
+            "yt-dlp expects. Re-export with a tool that produces a Netscape "
+            "cookies.txt, e.g. the 'Get cookies.txt LOCALLY' browser extension."
+        )
+        return warnings
+
+    data_lines = [
+        line for line in text.splitlines() if line.strip() and not line.startswith("#")
+    ]
+    if not data_lines:
+        warnings.append(
+            f"YTDLP_COOKIEFILE at '{path}' has no cookie entries — only "
+            "comments or blank lines. Re-export it."
+        )
+    elif not any("youtube.com" in line for line in data_lines):
+        warnings.append(
+            f"YTDLP_COOKIEFILE at '{path}' has no youtube.com cookies. Make sure "
+            "you were logged into youtube.com (not just google.com) when you "
+            "exported it."
+        )
+
+    return warnings
 
 
 class _ErrorCapture:

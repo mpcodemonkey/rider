@@ -54,3 +54,20 @@ def test_validate_requires_a_token():
     config = Config()
     with pytest.raises(SystemExit, match="FLUXER_TOKEN"):
         config.validate()
+
+
+def test_cookiefile_env_and_volume_mount_are_independent(tmp_path, monkeypatch):
+    """Regression: mounting cookies.txt into the container doesn't configure
+    the bot to use it — YTDLP_COOKIEFILE has to be set separately. This is
+    the most common reason cookies silently don't apply.
+    """
+    cookiefile = tmp_path / "cookies.txt"
+    cookiefile.write_text("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx\n")
+
+    # File exists on disk, but the env var was never set.
+    config = Config.from_env(dotenv=None)
+    assert config.ytdlp_cookiefile is None
+
+    monkeypatch.setenv("YTDLP_COOKIEFILE", str(cookiefile))
+    config = Config.from_env(dotenv=None)
+    assert config.ytdlp_cookiefile == str(cookiefile)
