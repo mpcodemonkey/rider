@@ -272,3 +272,25 @@ def test_copy_for_reassigns_the_requester():
     assert copy.requester_id == 2
     assert copy.requester_name == "player2"
     assert original.requester_id == 1
+
+
+# ---------------------------------------------------------------------------
+# player_client / cookies
+# ---------------------------------------------------------------------------
+def test_default_player_clients_support_cookies(config):
+    """Regression: 'android' ignores cookiefile entirely, so it must not lead."""
+    assert config.ytdlp_player_clients == ["web", "tv"]
+
+
+def test_build_opts_passes_the_configured_player_clients(ytdlp, config):
+    config.ytdlp_player_clients = ["web", "tv", "android"]
+    ytdlp = YTDLPSource(config)
+    opts = ytdlp._build_opts(flat=False)
+    assert opts["extractor_args"]["youtube"]["player_client"] == ["web", "tv", "android"]
+
+
+def test_cookiefile_is_only_set_when_configured(ytdlp, config):
+    assert "cookiefile" not in ytdlp._build_opts(flat=False)
+    config.ytdlp_cookiefile = "/config/cookies.txt"
+    ytdlp = YTDLPSource(config)
+    assert ytdlp._build_opts(flat=False)["cookiefile"] == "/config/cookies.txt"

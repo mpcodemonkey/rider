@@ -271,9 +271,15 @@ picks up the fix. It happens because Docker creates `./data` owned by root on th
 
 **"ffmpeg executable not found"** — install ffmpeg, or set `FFMPEG_PATH`.
 
-**Bot joins but nothing plays** — check the logs for a yt-dlp error. YouTube sometimes demands a
-signed-in client; supply `YTDLP_COOKIEFILE`. Keep yt-dlp current (`pip install -U yt-dlp`);
-extraction breaks whenever YouTube changes, and that is the usual cause.
+**Bot joins but nothing plays** — check the logs for a yt-dlp error. Keep yt-dlp current
+(`pip install -U yt-dlp` / rebuild the image); extraction breaks whenever YouTube changes, and
+that is the usual cause.
+
+**"Sign in to confirm you're not a bot" even with `YTDLP_COOKIEFILE` set** — cookies only work
+with a client that actually sends them. `YTDLP_PLAYER_CLIENTS` defaults to `web,tv`, both of
+which do; `android`, `mweb` and `ios` silently ignore any cookiefile no matter what you set. Also
+double-check the cookie export is fresh (they expire) and came from a real logged-in session, not
+an incognito/private one.
 
 **Commands are ignored** — the **Message Content** intent is almost always the reason. Confirm the
 prefix with an @mention: `@bot help` works regardless of prefix.

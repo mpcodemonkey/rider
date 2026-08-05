@@ -84,8 +84,13 @@ class YTDLPSource:
             # Playlists are flattened so a 500-track playlist costs one request.
             "extract_flat": "in_playlist" if flat else False,
             "playlistend": self.config.playlist_limit,
-            # Audio-only clients avoid a lot of throttled formats on YouTube.
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            # 'android'/'mweb' ignore cookies entirely (yt-dlp's own client
+            # table marks SUPPORTS_COOKIES=False for both) and now require a
+            # PO token we don't provide, so a cookiefile only helps when a
+            # cookie-aware client — 'web' or 'tv' — is tried first.
+            "extractor_args": {
+                "youtube": {"player_client": self.config.ytdlp_player_clients}
+            },
         }
         if self.config.ytdlp_cookiefile:
             opts["cookiefile"] = self.config.ytdlp_cookiefile
