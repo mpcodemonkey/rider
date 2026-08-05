@@ -276,10 +276,19 @@ picks up the fix. It happens because Docker creates `./data` owned by root on th
 that is the usual cause.
 
 **"Sign in to confirm you're not a bot" even with `YTDLP_COOKIEFILE` set** — cookies only work
-with a client that actually sends them. `YTDLP_PLAYER_CLIENTS` defaults to `web,tv`, both of
+with a client that actually sends them. `YTDLP_PLAYER_CLIENTS` defaults to `tv,web`, both of
 which do; `android`, `mweb` and `ios` silently ignore any cookiefile no matter what you set. Also
 double-check the cookie export is fresh (they expire) and came from a real logged-in session, not
 an incognito/private one.
+
+**"Requested format is not available"** — the client that got used requires a PO (proof-of-origin)
+token, which this bot doesn't provide, so YouTube handed back a stream list with nothing playable
+in it. Only `tv` needs no PO token on any protocol; `web` needs one for most formats, and
+`android`/`mweb`/`ios` need one too (and also ignore cookies). Make sure `tv` leads
+`YTDLP_PLAYER_CLIENTS` — it's the default, so this usually means something explicitly overrode it.
+If `tv` alone is still getting this on a specific video, that video may need a working PO token
+provider (e.g. [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)),
+which is outside what this bot sets up for you.
 
 **Commands are ignored** — the **Message Content** intent is almost always the reason. Confirm the
 prefix with an @mention: `@bot help` works regardless of prefix.

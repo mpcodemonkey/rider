@@ -88,6 +88,28 @@ def diagnose_cookiefile(path: str) -> list[str]:
     return warnings
 
 
+def validate_player_clients(clients: list[str]) -> list[str]:
+    """Catch a typo'd YTDLP_PLAYER_CLIENTS entry before it wastes a debugging
+    session — an unknown client name is silently dropped by yt-dlp rather
+    than rejected, which just quietly reduces the fallback chain.
+    """
+    try:
+        from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+    except ImportError:
+        return []  # yt-dlp not installed; _check_dependencies() already covers this
+
+    # Names starting with "_" are internal variants users can't select.
+    known = {name for name in INNERTUBE_CLIENTS if not name.startswith("_")}
+    unknown = [name for name in clients if name not in known]
+    if not unknown:
+        return []
+    return [
+        f"YTDLP_PLAYER_CLIENTS has an unrecognised client '{name}' — it will be "
+        f"silently ignored by yt-dlp. Known clients: {', '.join(sorted(known))}."
+        for name in unknown
+    ]
+
+
 class _ErrorCapture:
     """A yt-dlp logger that keeps the last error instead of printing it.
 
@@ -144,10 +166,12 @@ class YTDLPSource:
             # Playlists are flattened so a 500-track playlist costs one request.
             "extract_flat": "in_playlist" if flat else False,
             "playlistend": self.config.playlist_limit,
-            # 'android'/'mweb' ignore cookies entirely (yt-dlp's own client
-            # table marks SUPPORTS_COOKIES=False for both) and now require a
-            # PO token we don't provide, so a cookiefile only helps when a
-            # cookie-aware client — 'web' or 'tv' — is tried first.
+            # See Config.ytdlp_player_clients: 'tv' leads because it's the
+            # only client that both honors cookies and needs no PO token,
+            # which this bot doesn't provide. Getting this order wrong
+            # produces two different failures depending on which property
+            # is missing: no cookies -> "Sign in to confirm you're not a
+            # bot"; no PO token -> "Requested format is not available".
             "extractor_args": {
                 "youtube": {"player_client": self.config.ytdlp_player_clients}
             },

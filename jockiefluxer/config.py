@@ -90,9 +90,14 @@ class Config:
     ytdlp_format: str = "bestaudio/best"
     ytdlp_cookiefile: str | None = None
     ytdlp_proxy: str | None = None
-    # 'web' and 'tv' both honor cookies; 'android'/'mweb'/'ios' don't and now
-    # need a PO token, so they belong after a cookie-aware client, not before.
-    ytdlp_player_clients: list[str] = field(default_factory=lambda: ["web", "tv"])
+    # 'tv' is the only client that both honors cookies AND needs no PO token
+    # on any protocol (checked against yt_dlp.extractor.youtube._base's own
+    # INNERTUBE_CLIENTS table). 'web' honors cookies too but now requires a
+    # PO token for HTTPS/DASH — the protocols carrying most audio formats —
+    # so without a PO-token-provider service configured it frequently returns
+    # zero usable formats. 'android'/'mweb'/'ios' need a PO token *and*
+    # ignore cookies outright. So: tv leads, web is a secondary attempt.
+    ytdlp_player_clients: list[str] = field(default_factory=lambda: ["tv", "web"])
     # Number of playlist entries pulled per request; guards against 10k-entry mixes.
     playlist_limit: int = 500
     spotify_client_id: str | None = None
@@ -136,7 +141,7 @@ class Config:
             ytdlp_format=_env_str("YTDLP_FORMAT", "bestaudio/best"),
             ytdlp_cookiefile=_env_opt("YTDLP_COOKIEFILE"),
             ytdlp_proxy=_env_opt("YTDLP_PROXY"),
-            ytdlp_player_clients=_env_list("YTDLP_PLAYER_CLIENTS", ["web", "tv"]),
+            ytdlp_player_clients=_env_list("YTDLP_PLAYER_CLIENTS", ["tv", "web"]),
             playlist_limit=_env_int("PLAYLIST_LIMIT", 500),
             spotify_client_id=_env_opt("SPOTIFY_CLIENT_ID"),
             spotify_client_secret=_env_opt("SPOTIFY_CLIENT_SECRET"),

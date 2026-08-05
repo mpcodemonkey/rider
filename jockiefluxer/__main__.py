@@ -70,6 +70,14 @@ def _check_cookiefile(config: Config) -> None:
         log.info("YTDLP_COOKIEFILE found and looks valid: %s", config.ytdlp_cookiefile)
 
 
+def _check_player_clients(config: Config) -> None:
+    from .sources.ytdlp import validate_player_clients
+
+    for warning in validate_player_clients(config.ytdlp_player_clients):
+        log.warning(warning)
+    log.info("YouTube player clients (in order): %s", ", ".join(config.ytdlp_player_clients))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="jockiefluxer",
@@ -97,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     log.info("Starting jockiefluxer %s", __version__)
     log.info("API: %s", config.api_url or "https://api.fluxer.app/v1 (default)")
     _check_cookiefile(config)
+    _check_player_clients(config)
 
     bot = MusicBot(config)
     try:

@@ -279,7 +279,7 @@ def test_copy_for_reassigns_the_requester():
 # ---------------------------------------------------------------------------
 def test_default_player_clients_support_cookies(config):
     """Regression: 'android' ignores cookiefile entirely, so it must not lead."""
-    assert config.ytdlp_player_clients == ["web", "tv"]
+    assert config.ytdlp_player_clients == ["tv", "web"]
 
 
 def test_build_opts_passes_the_configured_player_clients(ytdlp, config):
@@ -346,3 +346,35 @@ def test_diagnose_valid_netscape_cookiefile_has_no_warnings(tmp_path):
         ".youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\txyz789\n"
     )
     assert diagnose_cookiefile(str(path)) == []
+
+
+# ---------------------------------------------------------------------------
+# Player client validation (typo protection)
+# ---------------------------------------------------------------------------
+from jockiefluxer.sources.ytdlp import validate_player_clients  # noqa: E402
+
+
+def test_validate_player_clients_accepts_known_names():
+    assert validate_player_clients(["tv", "web"]) == []
+    assert validate_player_clients(["web", "mweb", "android", "ios"]) == []
+
+
+def test_validate_player_clients_flags_a_typo():
+    warnings = validate_player_clients(["tv", "wbe"])  # typo'd 'web'
+    assert len(warnings) == 1
+    assert "wbe" in warnings[0]
+    assert "tv" in warnings[0]  # known clients are listed for reference
+
+
+def test_validate_player_clients_flags_internal_only_names():
+    """Names starting with '_' are internal variants users can't select."""
+    from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+
+    internal_names = [name for name in INNERTUBE_CLIENTS if name.startswith("_")]
+    if internal_names:
+        assert validate_player_clients([internal_names[0]]) != []
+
+
+def test_validate_player_clients_reports_every_bad_entry():
+    warnings = validate_player_clients(["nope", "also_bad", "tv"])
+    assert len(warnings) == 2
