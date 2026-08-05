@@ -378,3 +378,106 @@ def test_validate_player_clients_flags_internal_only_names():
 def test_validate_player_clients_reports_every_bad_entry():
     warnings = validate_player_clients(["nope", "also_bad", "tv"])
     assert len(warnings) == 2
+
+
+# ---------------------------------------------------------------------------
+# PO token provider wiring
+# ---------------------------------------------------------------------------
+def test_pot_provider_extractor_args_absent_when_unconfigured(ytdlp):
+    opts = ytdlp._build_opts(flat=False)
+    assert "youtubepot-bgutilhttp" not in opts["extractor_args"]
+
+
+def test_pot_provider_extractor_args_present_when_configured(config):
+    config.ytdlp_pot_provider_url = "http://bgutil-pot-provider:4416"
+    ytdlp = YTDLPSource(config)
+    opts = ytdlp._build_opts(flat=False)
+    assert opts["extractor_args"]["youtubepot-bgutilhttp"] == {
+        "base_url": ["http://bgutil-pot-provider:4416"]
+    }
+
+
+def test_pot_provider_extractor_args_resolve_through_real_yt_dlp(config):
+    """The dict shape has to match what yt-dlp's own config resolution
+    expects — verified against a real YoutubeDL instance and the exact
+    lookup the bgutil plugin performs, not just eyeballed."""
+    from yt_dlp import YoutubeDL
+
+    config.ytdlp_pot_provider_url = "http://bgutil-pot-provider:4416"
+    ytdlp = YTDLPSource(config)
+    opts = ytdlp._build_opts(flat=False)
+
+    with YoutubeDL(opts) as ydl:
+        ie = ydl.get_info_extractor("Youtube")
+        resolved = ie._configuration_arg(
+            "base_url", ie_key="youtubepot-bgutilhttp", default=[None]
+        )[0]
+    assert resolved == "http://bgutil-pot-provider:4416"
+
+
+# ---------------------------------------------------------------------------
+# PO token provider health check
+# ---------------------------------------------------------------------------
+import http.server  # noqa: E402
+import json as _json  # noqa: E402
+import threading  # noqa: E402
+
+from jockiefluxer.sources.ytdlp import check_pot_provider  # noqa: E402
+
+
+class _PingHandler(http.server.BaseHTTPRequestHandler):
+    response_body = b'{"version": "1.3.1"}'
+    status = 200
+
+    def do_GET(self):
+        self.send_response(self.status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(self.response_body)
+
+    def log_message(self, *args):
+        pass
+
+
+def _run_server(handler_cls):
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler_cls)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def test_check_pot_provider_reports_healthy_server():
+    server, thread = _run_server(_PingHandler)
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        assert check_pot_provider(url) is None
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_check_pot_provider_reports_connection_refused():
+    problem = check_pot_provider("http://127.0.0.1:1", timeout=1.0)
+    assert problem is not None
+    assert "Could not reach" in problem
+
+
+def test_check_pot_provider_reports_invalid_response_body():
+    class GarbageHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"not json")
+
+        def log_message(self, *args):
+            pass
+
+    server, thread = _run_server(GarbageHandler)
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        problem = check_pot_provider(url)
+        assert problem is not None
+        assert "not with the expected JSON" in problem
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)

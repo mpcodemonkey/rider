@@ -10,6 +10,24 @@ services:
       - ./data:/app/data
       # Optional: YouTube cookies for age-gated tracks.
       # - ./cookies.txt:/config/cookies.txt:ro
+    # Uncomment if you're running the PO token provider below - lets
+    # YTDLP_POT_PROVIDER_URL use the service name instead of an IP.
+    # depends_on:
+    #   - bgutil-pot-provider
+
+  # PO token provider — only needed if YouTube still blocks you with "Sign
+  # in to confirm you're not a bot" or "Requested format is not available"
+  # after YTDLP_COOKIEFILE is correctly set (see README). Common on
+  # datacenter/VPS IPs, which YouTube flags harder than home connections.
+  # Uncomment this and set YTDLP_POT_PROVIDER_URL=http://bgutil-pot-provider:4416
+  # in .env.
+  #
+  # bgutil-pot-provider:
+  #   image: brainicism/bgutil-ytdlp-pot-provider
+  #   container_name: bgutil-pot-provider
+  #   restart: unless-stopped
+  #   # No ports: needed — jockiefluxer reaches it over the compose network
+  #   # by service name, nothing outside this compose file needs to see it.
 
   # Jockie users are used to running Jockie Music 2, 3, … alongside the first
   # so several parties can listen to different things. Each extra instance is

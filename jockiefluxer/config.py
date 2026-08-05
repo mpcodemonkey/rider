@@ -98,6 +98,13 @@ class Config:
     # zero usable formats. 'android'/'mweb'/'ios' need a PO token *and*
     # ignore cookies outright. So: tv leads, web is a secondary attempt.
     ytdlp_player_clients: list[str] = field(default_factory=lambda: ["tv", "web"])
+    # URL of a bgutil-ytdlp-pot-provider server (see README), e.g.
+    # http://bgutil-pot-provider:4416 in Docker Compose. Unset by default:
+    # 'tv' avoids the PO token requirement entirely for most videos, so this
+    # is only needed once YouTube starts demanding one anyway — usually
+    # because the bot is running from a datacenter/VPS IP that gets flagged
+    # regardless of valid cookies.
+    ytdlp_pot_provider_url: str | None = None
     # Number of playlist entries pulled per request; guards against 10k-entry mixes.
     playlist_limit: int = 500
     spotify_client_id: str | None = None
@@ -142,6 +149,7 @@ class Config:
             ytdlp_cookiefile=_env_opt("YTDLP_COOKIEFILE"),
             ytdlp_proxy=_env_opt("YTDLP_PROXY"),
             ytdlp_player_clients=_env_list("YTDLP_PLAYER_CLIENTS", ["tv", "web"]),
+            ytdlp_pot_provider_url=_env_opt("YTDLP_POT_PROVIDER_URL"),
             playlist_limit=_env_int("PLAYLIST_LIMIT", 500),
             spotify_client_id=_env_opt("SPOTIFY_CLIENT_ID"),
             spotify_client_secret=_env_opt("SPOTIFY_CLIENT_SECRET"),

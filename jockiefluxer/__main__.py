@@ -78,6 +78,22 @@ def _check_player_clients(config: Config) -> None:
     log.info("YouTube player clients (in order): %s", ", ".join(config.ytdlp_player_clients))
 
 
+def _check_pot_provider(config: Config) -> None:
+    """Ping a configured PO token provider so a wrong URL/unstarted server
+    shows up as a startup log line instead of a mid-session extraction error.
+    """
+    if not config.ytdlp_pot_provider_url:
+        return
+
+    from .sources.ytdlp import check_pot_provider
+
+    problem = check_pot_provider(config.ytdlp_pot_provider_url)
+    if problem:
+        log.warning(problem)
+    else:
+        log.info("PO token provider reachable at %s", config.ytdlp_pot_provider_url)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="jockiefluxer",
@@ -106,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     log.info("API: %s", config.api_url or "https://api.fluxer.app/v1 (default)")
     _check_cookiefile(config)
     _check_player_clients(config)
+    _check_pot_provider(config)
 
     bot = MusicBot(config)
     try:

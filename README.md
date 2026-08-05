@@ -191,6 +191,47 @@ rejected with an explanation rather than silently failing.
 Large playlists load lazily: only the metadata is fetched up front, and each track's stream URL is
 resolved just before it plays. Queueing a 500-track playlist is one request, not 500.
 
+### YouTube cookies and PO tokens
+
+YouTube increasingly wants two separate things from any bot pulling audio from it, and each one
+fails differently when missing:
+
+| Missing | Symptom | Fixed by |
+| --- | --- | --- |
+| Cookies | `Sign in to confirm you're not a bot` | `YTDLP_COOKIEFILE` |
+| PO token | `Requested format is not available` | leading with the `tv` client (default) |
+
+`YTDLP_PLAYER_CLIENTS` defaults to `tv,web` specifically because `tv` is the only YouTube client
+that sends cookies *and* needs no PO token on any protocol — checked directly against yt-dlp's own
+client table, not assumed. That's enough for most self-hosted setups without any extra
+infrastructure.
+
+Where it isn't enough: some networks — datacenter and VPS IP ranges especially — get bot-checked
+by YouTube regardless of valid cookies or client choice. If you've set `YTDLP_COOKIEFILE`
+correctly (confirm in the startup log — it says so explicitly) and are still blocked, run a PO
+token provider:
+
+```bash
+# In .env:
+YTDLP_POT_PROVIDER_URL=http://bgutil-pot-provider:4416
+```
+
+```yaml
+# In docker-compose.yml, uncomment the bgutil-pot-provider service and the
+# jockiefluxer service's depends_on: block (both are already there, just
+# commented out).
+```
+
+```bash
+docker compose up -d
+```
+
+This runs [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)
+as a sidecar container that solves YouTube's BotGuard challenge and hands yt-dlp a valid PO token
+on request. The Python-side plugin is already a dependency of this bot — installing it doesn't
+require the sidecar to be running, it's a no-op until `YTDLP_POT_PROVIDER_URL` points at one. The
+startup log confirms reachability the same way it does for cookies.
+
 ---
 
 ## Notes for tabletop use
@@ -275,20 +316,12 @@ picks up the fix. It happens because Docker creates `./data` owned by root on th
 (`pip install -U yt-dlp` / rebuild the image); extraction breaks whenever YouTube changes, and
 that is the usual cause.
 
-**"Sign in to confirm you're not a bot" even with `YTDLP_COOKIEFILE` set** — cookies only work
-with a client that actually sends them. `YTDLP_PLAYER_CLIENTS` defaults to `tv,web`, both of
-which do; `android`, `mweb` and `ios` silently ignore any cookiefile no matter what you set. Also
-double-check the cookie export is fresh (they expire) and came from a real logged-in session, not
-an incognito/private one.
-
-**"Requested format is not available"** — the client that got used requires a PO (proof-of-origin)
-token, which this bot doesn't provide, so YouTube handed back a stream list with nothing playable
-in it. Only `tv` needs no PO token on any protocol; `web` needs one for most formats, and
-`android`/`mweb`/`ios` need one too (and also ignore cookies). Make sure `tv` leads
-`YTDLP_PLAYER_CLIENTS` — it's the default, so this usually means something explicitly overrode it.
-If `tv` alone is still getting this on a specific video, that video may need a working PO token
-provider (e.g. [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)),
-which is outside what this bot sets up for you.
+**"Sign in to confirm you're not a bot"** and **"Requested format is not available"** — see
+[YouTube cookies and PO tokens](#youtube-cookies-and-po-tokens) above; these are the two symptoms
+of the two things YouTube wants (cookies and a PO token) and the table there tells you which is
+missing. If `YTDLP_COOKIEFILE` is correctly set (the startup log confirms this) and `tv` leads
+`YTDLP_PLAYER_CLIENTS` (the default) and you're *still* blocked, that's the datacenter-IP case —
+set up the PO token provider described in that section.
 
 **Commands are ignored** — the **Message Content** intent is almost always the reason. Confirm the
 prefix with an @mention: `@bot help` works regardless of prefix.

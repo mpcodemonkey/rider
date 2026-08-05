@@ -11,7 +11,10 @@ synchronous and a cold YouTube extraction can take seconds.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +113,37 @@ def validate_player_clients(clients: list[str]) -> list[str]:
     ]
 
 
+def check_pot_provider(base_url: str, timeout: float = 3.0) -> str | None:
+    """Ping a configured bgutil-ytdlp-pot-provider server.
+
+    Returns ``None`` if it responded and looks healthy, or a human-readable
+    problem description otherwise. This hits the same ``/ping`` endpoint the
+    yt-dlp plugin itself checks before every PO token request, so "reachable
+    here" really does mean "yt-dlp will be able to reach it too" — same
+    network path, same URL.
+    """
+    url = f"{base_url.rstrip('/')}/ping"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+    except urllib.error.URLError as exc:
+        return (
+            f"Could not reach the PO token provider at '{base_url}': {exc.reason}. "
+            "Check the server is running and the URL/port match your "
+            "docker-compose service name."
+        )
+    except (TimeoutError, OSError) as exc:
+        return f"Could not reach the PO token provider at '{base_url}': {exc}"
+    except (json.JSONDecodeError, ValueError):
+        return (
+            f"The PO token provider at '{base_url}' responded, but not with "
+            "the expected JSON — is this really a bgutil-ytdlp-pot-provider server?"
+        )
+
+    version = payload.get("version", "unknown")
+    return None if version else f"PO token provider at '{base_url}' returned no version."
+
+
 class _ErrorCapture:
     """A yt-dlp logger that keeps the last error instead of printing it.
 
@@ -176,6 +210,14 @@ class YTDLPSource:
                 "youtube": {"player_client": self.config.ytdlp_player_clients}
             },
         }
+        if self.config.ytdlp_pot_provider_url:
+            # Read by bgutil-ytdlp-pot-provider's HTTP plugin (self-registers
+            # with yt-dlp once the pip package is installed - no other wiring
+            # needed here). Value must be a list per yt-dlp's extractor-args
+            # convention.
+            opts["extractor_args"]["youtubepot-bgutilhttp"] = {
+                "base_url": [self.config.ytdlp_pot_provider_url]
+            }
         if self.config.ytdlp_cookiefile:
             opts["cookiefile"] = self.config.ytdlp_cookiefile
         if self.config.ytdlp_proxy:

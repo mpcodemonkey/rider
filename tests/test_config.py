@@ -98,3 +98,13 @@ def test_default_player_client_matches_yt_dlps_actual_capability_table():
         "requires a PO token on at least one protocol, which this bot doesn't "
         "provide — pick a different default client"
     )
+
+
+def test_pot_provider_url_is_unset_by_default():
+    assert Config.from_env(dotenv=None).ytdlp_pot_provider_url is None
+
+
+def test_pot_provider_url_is_read_from_env(monkeypatch):
+    monkeypatch.setenv("YTDLP_POT_PROVIDER_URL", "http://bgutil-pot-provider:4416")
+    config = Config.from_env(dotenv=None)
+    assert config.ytdlp_pot_provider_url == "http://bgutil-pot-provider:4416"

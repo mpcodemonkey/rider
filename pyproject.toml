@@ -13,6 +13,10 @@ dependencies = [
     "fluxer.py[voice]>=0.4.2",
     "yt-dlp>=2024.1.1",
     "aiohttp>=3.9.0",
+    # Self-registers as a yt-dlp PO-token provider plugin (no integration code
+    # needed here). A no-op unless YTDLP_POT_PROVIDER_URL points it at a
+    # running bgutil-ytdlp-pot-provider server - see README.
+    "bgutil-ytdlp-pot-provider>=1.0.0",
 ]
 
 [project.optional-dependencies]
