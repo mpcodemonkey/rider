@@ -58,7 +58,9 @@ docker compose up -d
 ```
 
 The `data/` volume holds saved playlists, favourites and per-server settings — back that up and
-you keep everything across upgrades.
+you keep everything across upgrades. The container starts as root just long enough to fix that
+volume's ownership (Docker creates it owned by root on first run), then drops to an unprivileged
+user before running the bot.
 
 ### Pointing at a self-hosted Fluxer
 
@@ -261,6 +263,11 @@ jockiefluxer/
 ```
 
 ## Troubleshooting
+
+**`sqlite3.OperationalError: unable to open database file`** — the image's entrypoint fixes this
+automatically as of the current build; `docker compose build --no-cache && docker compose up -d`
+picks up the fix. It happens because Docker creates `./data` owned by root on the first
+`docker compose up`, before the container gets a chance to claim it.
 
 **"ffmpeg executable not found"** — install ffmpeg, or set `FFMPEG_PATH`.
 
