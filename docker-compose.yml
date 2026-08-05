@@ -8,8 +8,14 @@ services:
     volumes:
       # Saved playlists, favourites and per-server settings.
       - ./data:/app/data
-      # Optional: YouTube cookies for age-gated tracks.
-      # - ./cookies.txt:/config/cookies.txt:ro
+      # Optional: YouTube cookies for age-gated tracks and to avoid bot
+      # checks. Deliberately NOT mounted :ro — yt-dlp writes renewed
+      # session cookies back to this same file after every request, which
+      # is what keeps a cookiefile working for weeks without you manually
+      # re-exporting it. A read-only mount silently breaks that (and, if
+      # genuinely read-only, breaks playback outright). The entrypoint
+      # fixes ownership on start, same as it does for ./data.
+      # - ./cookies.txt:/config/cookies.txt
     # Uncomment if you're running the PO token provider below - lets
     # YTDLP_POT_PROVIDER_URL use the service name instead of an IP.
     # depends_on:

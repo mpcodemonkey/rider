@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -86,6 +87,17 @@ def diagnose_cookiefile(path: str) -> list[str]:
             f"YTDLP_COOKIEFILE at '{path}' has no youtube.com cookies. Make sure "
             "you were logged into youtube.com (not just google.com) when you "
             "exported it."
+        )
+
+    if not os.access(file_path, os.W_OK):
+        warnings.append(
+            f"YTDLP_COOKIEFILE at '{path}' is not writable. yt-dlp writes "
+            "renewed session cookies back to this file after every request — "
+            "that's what keeps cookies working for weeks without manual "
+            "re-export — but it can't do that here. If this is a Docker "
+            "bind mount, drop any ':ro' suffix in docker-compose.yml and "
+            "make sure the container's entrypoint had a chance to fix "
+            "ownership (restart the container if you just added the mount)."
         )
 
     return warnings
@@ -231,8 +243,26 @@ class YTDLPSource:
 
         capture = _ErrorCapture()
         opts = {**(self._flat_opts if flat else self._full_opts), "logger": capture}
-        with YoutubeDL(opts) as ydl:
+        ydl = YoutubeDL(opts)
+        try:
             info = ydl.extract_info(query, download=False)
+        finally:
+            # YoutubeDL.close() persists any renewed session cookies back to
+            # YTDLP_COOKIEFILE — this is what keeps cookies fresh without
+            # manual re-export. If the file isn't writable (bad mount,
+            # ownership mismatch, full disk) that write raises OSError; a
+            # `with YoutubeDL(...)` block would let that replace a perfectly
+            # good `info` result with a confusing filesystem error, so this
+            # is deliberately outside the try body and caught on its own.
+            try:
+                ydl.close()
+            except OSError as exc:
+                log.warning(
+                    "Could not save updated cookies to %r (%s). YouTube "
+                    "cookies won't auto-refresh until this is fixed — the "
+                    "usual cause is a read-only mount or ownership mismatch.",
+                    self.config.ytdlp_cookiefile, exc,
+                )
         return info, capture.last_error
 
     async def _extract(

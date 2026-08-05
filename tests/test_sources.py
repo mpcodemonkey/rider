@@ -348,6 +348,33 @@ def test_diagnose_valid_netscape_cookiefile_has_no_warnings(tmp_path):
     assert diagnose_cookiefile(str(path)) == []
 
 
+def test_diagnose_flags_an_unwritable_cookiefile(tmp_path, monkeypatch):
+    """Regression: yt-dlp persists renewed session cookies back to this file
+    after every request (that's what keeps cookies working without manual
+    re-export) - if it can't write, that has to show up at startup, not as
+    a raw OSError buried in mid-session logs.
+    """
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx\n"
+    )
+
+    import jockiefluxer.sources.ytdlp as ytdlp_module
+
+    monkeypatch.setattr(ytdlp_module.os, "access", lambda *a, **k: False)
+    warnings = diagnose_cookiefile(str(path))
+    assert any("not writable" in warning for warning in warnings)
+
+
+def test_diagnose_valid_writable_cookiefile_has_no_warnings(tmp_path):
+    """The writability check must not false-positive on the normal case."""
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx\n"
+    )
+    assert diagnose_cookiefile(str(path)) == []
+
+
 # ---------------------------------------------------------------------------
 # Player client validation (typo protection)
 # ---------------------------------------------------------------------------
@@ -481,3 +508,45 @@ def test_check_pot_provider_reports_invalid_response_body():
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Cookie persistence resilience
+# ---------------------------------------------------------------------------
+def test_extract_sync_survives_a_cookie_save_failure(config, monkeypatch):
+    """Regression: YoutubeDL.close() persists renewed cookies to disk and
+    raises OSError if that write fails (e.g. a read-only mount). Using
+    `with YoutubeDL(...) as ydl:` would let that exception replace an
+    already-successful extract_info() result. It must not.
+    """
+    import yt_dlp
+
+    def fake_extract_info(self, query, download=False):
+        return {"id": "abc123", "title": "Tavern Ambience"}
+
+    def failing_close(self):
+        raise OSError("[Errno 30] Read-only file system: '/config/cookies.txt'")
+
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", fake_extract_info)
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "close", failing_close)
+
+    config.ytdlp_cookiefile = "/config/cookies.txt"
+    ytdlp = YTDLPSource(config)
+
+    info, error = ytdlp._extract_sync("some query", flat=False)
+    assert info == {"id": "abc123", "title": "Tavern Ambience"}
+    assert error is None
+
+
+def test_extract_sync_propagates_extract_info_failures_normally(config, monkeypatch):
+    """The close()-failure guard must not swallow a genuine extraction error."""
+    import yt_dlp
+
+    def failing_extract_info(self, query, download=False):
+        raise RuntimeError("network exploded")
+
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", failing_extract_info)
+
+    ytdlp = YTDLPSource(config)
+    with pytest.raises(RuntimeError, match="network exploded"):
+        ytdlp._extract_sync("some query", flat=False)

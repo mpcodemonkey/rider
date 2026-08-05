@@ -232,6 +232,31 @@ on request. The Python-side plugin is already a dependency of this bot — insta
 require the sidecar to be running, it's a no-op until `YTDLP_POT_PROVIDER_URL` points at one. The
 startup log confirms reachability the same way it does for cookies.
 
+### Keeping cookies fresh without babysitting them
+
+You don't need to manually re-export `cookies.txt` on a schedule. yt-dlp writes any renewed
+session cookies YouTube hands back — which happens on essentially every authenticated request —
+to the *same file* after every extraction, closing the loop on its own. Confirmed directly against
+yt-dlp's own code (`YoutubeDL.close()` → `save_cookies()` → `cookiejar.save()`), and this bot
+already exercises it on every single track load and search.
+
+The only requirement is that the file actually be **writable** inside the container, which is why
+the `docker-compose.yml` example deliberately does *not* mount it `:ro` — a read-only cookie
+mount silently breaks this, and on a genuinely read-only filesystem it breaks YouTube playback
+outright, not just cookie refresh. If you copied an older version of this README or compose file
+that suggested `:ro`, drop it. The entrypoint fixes file ownership on every start (same as it does
+for `./data`), so a freshly-exported `cookies.txt` on the host — however it's owned there — becomes
+writable to the bot without you running `chown` by hand. The startup log tells you if any of this
+isn't lined up: a missing file, wrong format, or an unwritable file each get their own message.
+
+What this **doesn't** cover: YouTube can still force a hard session invalidation — a password
+change, a "suspicious activity" flag, or just enough elapsed time — at which point the cookies
+stop working outright and no amount of auto-persisting saves you. That's rarer than routine
+rotation, but when it happens, re-export is the only fix. There's no way to script around a fresh
+login without automating sign-in to a Google account, which risks the account being flagged or
+locked — this bot deliberately doesn't do that, and doing it yourself is a decision to make with
+open eyes, not something to bolt onto a self-hosted music bot lightly.
+
 ---
 
 ## Notes for tabletop use
