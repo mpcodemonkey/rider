@@ -199,6 +199,40 @@ def _ping_pot_provider(base_url: str, timeout: float) -> str | None:
     return None if version else f"PO token provider at '{base_url}' returned no version."
 
 
+def check_js_runtime() -> str | None:
+    """Check whether yt-dlp can find a JavaScript runtime for its "n"
+    signature challenge solver.
+
+    Returns ``None`` if a supported runtime (Deno, Node, QuickJS, Bun) is
+    available, or a warning message otherwise. This asks yt-dlp's own
+    runtime-detection code directly rather than reimplementing "is deno on
+    PATH" — it's the exact mechanism yt-dlp itself uses before every
+    extraction, so a "yes" here really does mean yt-dlp will find it too.
+
+    Without a runtime, most YouTube formats disappear regardless of cookies
+    or a working PO token — this is a third, independent requirement, easy
+    to mistake for one of the other two given how similar the visible
+    symptom ("Requested format is not available") looks either way.
+    """
+    from yt_dlp import YoutubeDL
+
+    with YoutubeDL({"quiet": True}) as ydl:
+        available = [name for name, runtime in ydl._js_runtimes.items() if runtime and runtime.info]
+
+    if available:
+        return None
+    return (
+        "No JavaScript runtime found for yt-dlp's 'n' signature challenge "
+        "solver (checked: deno, node, quickjs, bun). Most YouTube formats "
+        "will be unusable ('Requested format is not available') regardless "
+        "of cookies or a working PO token provider — this is a separate, "
+        "third requirement. The provided Dockerfile installs Deno "
+        "automatically; running outside Docker, install Deno yourself (no "
+        "extra yt-dlp config needed once it's on PATH). See "
+        "https://github.com/yt-dlp/yt-dlp/wiki/EJS for details."
+    )
+
+
 def check_pot_provider(
     base_url: str,
     timeout: float = 3.0,

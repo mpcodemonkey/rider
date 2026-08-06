@@ -757,3 +757,29 @@ async def test_extract_sync_surfaces_warning_context_through_to_the_caller(confi
     assert error is not None
     assert "Requested format is not available" in error
     assert "SABR-only streaming experiment" in error
+
+
+# ---------------------------------------------------------------------------
+# JS runtime detection (yt-dlp's "n" signature challenge solver)
+# ---------------------------------------------------------------------------
+from jockiefluxer.sources.ytdlp import check_js_runtime  # noqa: E402
+
+
+def test_check_js_runtime_reports_a_problem_with_no_runtime_on_path(monkeypatch):
+    monkeypatch.setenv("PATH", "/nonexistent-empty-path")
+    problem = check_js_runtime()
+    assert problem is not None
+    assert "No JavaScript runtime found" in problem
+    assert "deno" in problem
+
+
+def test_check_js_runtime_passes_when_a_runtime_is_available():
+    """Skipped if this environment has no JS runtime installed at all;
+    everywhere the bot actually runs (the provided Dockerfile) does."""
+    import shutil
+
+    runtime = shutil.which("deno") or shutil.which("node")
+    if runtime is None:
+        pytest.skip("no JS runtime installed in this environment")
+
+    assert check_js_runtime() is None

@@ -11,7 +11,12 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     "fluxer.py[voice]>=0.4.2",
-    "yt-dlp>=2024.1.1",
+    # [default] pulls in yt-dlp-ejs, the JS scripts that solve YouTube's "n"
+    # signature challenge. Without them, most formats silently disappear
+    # ("Requested format is not available") regardless of cookies or a PO
+    # token - a JS runtime (Deno, installed separately - see Dockerfile)
+    # still has to actually be present for these to run.
+    "yt-dlp[default]>=2024.1.1",
     "aiohttp>=3.9.0",
     # Self-registers as a yt-dlp PO-token provider plugin (no integration code
     # needed here). A no-op unless YTDLP_POT_PROVIDER_URL points it at a

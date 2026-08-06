@@ -191,20 +191,36 @@ rejected with an explanation rather than silently failing.
 Large playlists load lazily: only the metadata is fetched up front, and each track's stream URL is
 resolved just before it plays. Queueing a 500-track playlist is one request, not 500.
 
-### YouTube cookies and PO tokens
+### YouTube cookies, a JS runtime, and PO tokens
 
-YouTube increasingly wants two separate things from any bot pulling audio from it, and each one
-fails differently when missing:
+YouTube wants three separate things from any bot pulling audio from it, and they fail with
+different symptoms — easy to mistake for one another since two of them share the same generic
+error text:
 
 | Missing | Symptom | Fixed by |
 | --- | --- | --- |
 | Cookies | `Sign in to confirm you're not a bot` | `YTDLP_COOKIEFILE` |
-| PO token | `Requested format is not available` | leading with the `tv` client (default) |
+| JS runtime | `Requested format is not available` | Deno — installed automatically by the Dockerfile |
+| PO token | `Requested format is not available` | a PO token provider (below) |
 
 `YTDLP_PLAYER_CLIENTS` defaults to `tv,web` specifically because `tv` is the only YouTube client
 that sends cookies *and* needs no PO token on any protocol — checked directly against yt-dlp's own
-client table, not assumed. That's enough for most self-hosted setups without any extra
-infrastructure.
+client table, not assumed. That covers the cookie and PO-token axes for most self-hosted setups
+without any extra infrastructure. The JS runtime is a separate, independent requirement that has
+nothing to do with client choice.
+
+**The JS runtime** is needed because YouTube protects most format URLs behind an "n" signature
+that has to be solved by running actual JavaScript — yt-dlp doesn't do this itself, it hands the
+challenge to an external runtime. Without one, most formats silently disappear regardless of
+cookies or a PO token, and yt-dlp says so directly if you look past the first line of the error:
+`n challenge solving failed... Ensure you have a supported JavaScript runtime and challenge solver
+script distribution installed`. Two separate components, both required: **Deno** (the runtime,
+installed automatically as a static binary in the provided `Dockerfile` — nothing to configure)
+and **yt-dlp-ejs** (the actual challenge-solving scripts, pulled in automatically as part of this
+project's `yt-dlp[default]` dependency). Running outside Docker, install Deno yourself and make
+sure it's on `PATH` — yt-dlp uses it with no extra flags once it's there. The startup log confirms
+whether yt-dlp can actually find a runtime, checked against yt-dlp's own detection code, not a
+guess about what's on `PATH`. Background: <https://github.com/yt-dlp/yt-dlp/wiki/EJS>.
 
 Where it isn't enough: some networks — datacenter and VPS IP ranges especially — get bot-checked
 by YouTube regardless of valid cookies or client choice. If you've set `YTDLP_COOKIEFILE`
@@ -366,20 +382,20 @@ picks up the fix. It happens because Docker creates `./data` owned by root on th
 (`pip install -U yt-dlp` / rebuild the image); extraction breaks whenever YouTube changes, and
 that is the usual cause.
 
-**"Sign in to confirm you're not a bot"** and **"Requested format is not available"** — see
-[YouTube cookies and PO tokens](#youtube-cookies-and-po-tokens) above; these are the two symptoms
-of the two things YouTube wants (cookies and a PO token) and the table there tells you which is
-missing. If `YTDLP_COOKIEFILE` is correctly set (the startup log confirms this) and `tv` leads
-`YTDLP_PLAYER_CLIENTS` (the default) and you're *still* blocked, that's the datacenter-IP case —
-set up the PO token provider described in that section.
+**"Sign in to confirm you're not a bot"**, **"Requested format is not available"** — see
+[YouTube cookies, a JS runtime, and PO tokens](#youtube-cookies-a-js-runtime-and-po-tokens) above;
+"Requested format is not available" specifically covers *two* of the three things that section
+lists (missing JS runtime, missing PO token), which is exactly why the bot's error message now
+tells you which. Check the actual error text (the reply in chat, or the log line), not just the
+first line — it includes the more specific yt-dlp warnings that led up to the generic message
+(e.g. `n challenge solving failed` means the JS runtime, a named client being skipped means
+cookies, YouTube forcing SABR streaming means neither of those and is a separate, currently-
+evolving YouTube-side rollout). Confirm `YTDLP_COOKIEFILE` is correctly set (the startup log says
+so), `tv` leads `YTDLP_PLAYER_CLIENTS` (the default), and a JS runtime is detected (also in the
+startup log) before assuming it's the PO-token/datacenter-IP case described in that section.
 
-If you've done all of that and one specific video still won't play, check the actual error text
-the bot gives you (the reply in chat, or the log line) rather than treating "Requested format is
-not available" as the whole story — it now includes the more specific yt-dlp warnings that led up
-to it (e.g. a named client being skipped, or YouTube forcing SABR streaming for that client),
-which is usually enough to tell you whether this is the cookie/PO-token issue again or something
-video-specific. If it mentions SABR, that's a separate, currently-evolving YouTube-side rollout —
-adding more fallback clients to `YTDLP_PLAYER_CLIENTS` (e.g. `tv,web,mweb`) is worth trying, but
+If the fuller error mentions SABR specifically, adding more fallback clients to
+`YTDLP_PLAYER_CLIENTS` (e.g. `tv,web,mweb`) is worth trying, but
 there's no fixed answer for it yet; check the linked yt-dlp issue in the log for current status.
 
 **Commands are ignored** — the **Message Content** intent is almost always the reason. Confirm the
