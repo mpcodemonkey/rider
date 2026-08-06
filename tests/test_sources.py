@@ -342,10 +342,59 @@ def test_diagnose_valid_netscape_cookiefile_has_no_warnings(tmp_path):
     path = tmp_path / "cookies.txt"
     path.write_text(
         "# Netscape HTTP Cookie File\n"
-        ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123\n"
-        ".youtube.com\tTRUE\t/\tTRUE\t0\t__Secure-3PSID\txyz789\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tAFmmF2abc\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\txyz789\n"
     )
     assert diagnose_cookiefile(str(path)) == []
+
+
+def test_diagnose_flags_cookies_that_arent_actually_a_login_session(tmp_path):
+    """Regression, verified against yt-dlp's real is_authenticated property:
+    consent/tracking cookies are present on every YouTube visit, logged in
+    or not, so "has some youtube.com cookies" is not the same question as
+    "is this an authenticated session". Getting this wrong is exactly what
+    produces "Sign in to confirm you're not a bot" despite a configured,
+    present, correctly-formatted cookiefile.
+    """
+    path = tmp_path / "cookies.txt"
+    path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tCONSENT\tYES+cb\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tVISITOR_INFO1_LIVE\tabc123\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\tf6=40000000\n"
+    )
+    warnings = diagnose_cookiefile(str(path))
+    assert warnings
+    assert "logged-in session" in warnings[0]
+
+
+def test_diagnose_requires_both_login_info_and_a_sid_cookie(tmp_path):
+    """Either alone doesn't authenticate - matches yt-dlp's own AND logic."""
+    login_info_only = tmp_path / "a.txt"
+    login_info_only.write_text(
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tx\n"
+    )
+    assert diagnose_cookiefile(str(login_info_only)) != []
+
+    sapisid_only = tmp_path / "b.txt"
+    sapisid_only.write_text(
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tx\n"
+    )
+    assert diagnose_cookiefile(str(sapisid_only)) != []
+
+
+def test_diagnose_accepts_any_sid_family_cookie(tmp_path):
+    """YouTube falls back to __Secure-3PAPISID/__Secure-1PAPISID when plain
+    SAPISID is absent - yt-dlp accepts any of the three, so this must too.
+    """
+    for cookie_name in ("SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID"):
+        path = tmp_path / f"{cookie_name}.txt"
+        path.write_text(
+            "# Netscape HTTP Cookie File\n"
+            f".youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tx\n"
+            f".youtube.com\tTRUE\t/\tTRUE\t0\t{cookie_name}\ty\n"
+        )
+        assert diagnose_cookiefile(str(path)) == [], f"failed for {cookie_name}"
 
 
 def test_diagnose_flags_an_unwritable_cookiefile(tmp_path, monkeypatch):
@@ -355,8 +404,12 @@ def test_diagnose_flags_an_unwritable_cookiefile(tmp_path, monkeypatch):
     a raw OSError buried in mid-session logs.
     """
     path = tmp_path / "cookies.txt"
+    # A genuinely-authenticated file, so the only warning in play is the
+    # writability one this test is actually about.
     path.write_text(
-        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx\n"
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tx\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\ty\n"
     )
 
     import jockiefluxer.sources.ytdlp as ytdlp_module
@@ -370,7 +423,9 @@ def test_diagnose_valid_writable_cookiefile_has_no_warnings(tmp_path):
     """The writability check must not false-positive on the normal case."""
     path = tmp_path / "cookies.txt"
     path.write_text(
-        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx\n"
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tx\n"
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\ty\n"
     )
     assert diagnose_cookiefile(str(path)) == []
 

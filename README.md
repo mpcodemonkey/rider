@@ -232,6 +232,18 @@ on request. The Python-side plugin is already a dependency of this bot — insta
 require the sidecar to be running, it's a no-op until `YTDLP_POT_PROVIDER_URL` points at one. The
 startup log confirms reachability the same way it does for cookies.
 
+Still blocked with the PO token provider reachable and `YTDLP_COOKIEFILE` pointed at a real,
+present file? There's a third possibility beyond "missing" and "stale": the file can contain real
+youtube.com cookies that still don't add up to a logged-in session. YouTube sets cookies like
+`CONSENT`, `VISITOR_INFO1_LIVE` and `PREF` on every visit, logged in or not — a cookiefile full of
+only those *looks* complete but isn't, because yt-dlp specifically checks for a `LOGIN_INFO`
+cookie plus one of `SAPISID` / `__Secure-3PAPISID` / `__Secure-1PAPISID` to decide a session is
+authenticated (verified directly against `is_authenticated` in yt-dlp's own source, not assumed).
+Without those specific cookies, yt-dlp treats the session as anonymous and hits the sign-in wall
+exactly as if `YTDLP_COOKIEFILE` weren't set at all. The startup log now checks for this
+specifically and says so if it's the problem; the fix is re-exporting while genuinely signed into
+a Google account in that browser, not just past a cookie-consent banner.
+
 A `Could not reach the PO token provider ... Connection refused` warning in the first few seconds
 after `docker compose up` is usually just a cold-start race, not a real problem: the sidecar image
 ships no healthcheck for Compose to wait on, so `depends_on` only guarantees it was *started*

@@ -34,6 +34,30 @@ class YTDLPError(RuntimeError):
     """Raised when yt-dlp could not produce anything playable."""
 
 
+# The exact cookies yt-dlp itself checks to decide a session is "logged in"
+# (extractor/youtube/_base.py: is_authenticated / _has_auth_cookies). A
+# cookiefile can contain plenty of real youtube.com cookies — consent,
+# region, visitor-id — without containing these, in which case yt-dlp treats
+# the session as anonymous regardless of how "full" the file looks.
+_LOGIN_MARKER_COOKIE = "LOGIN_INFO"
+_AUTH_SID_COOKIES = frozenset({"SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID"})
+
+
+def _parse_netscape_cookie_names(lines: list[str], domain_substring: str) -> set[str]:
+    """Cookie names from Netscape-format data lines matching a domain.
+
+    Netscape format is 7 tab-separated fields:
+    domain, include_subdomains, path, secure, expiration, name, value.
+    """
+    names: set[str] = set()
+    for line in lines:
+        fields = line.split("\t")
+        if len(fields) < 7 or domain_substring not in fields[0]:
+            continue
+        names.add(fields[5])
+    return names
+
+
 def diagnose_cookiefile(path: str) -> list[str]:
     """Sanity-check a configured YTDLP_COOKIEFILE, without validating yt-dlp
     would actually accept it (yt-dlp does that itself when it loads).
@@ -83,12 +107,34 @@ def diagnose_cookiefile(path: str) -> list[str]:
             f"YTDLP_COOKIEFILE at '{path}' has no cookie entries — only "
             "comments or blank lines. Re-export it."
         )
-    elif not any("youtube.com" in line for line in data_lines):
-        warnings.append(
-            f"YTDLP_COOKIEFILE at '{path}' has no youtube.com cookies. Make sure "
-            "you were logged into youtube.com (not just google.com) when you "
-            "exported it."
-        )
+    else:
+        youtube_cookie_names = _parse_netscape_cookie_names(data_lines, "youtube.com")
+        if not youtube_cookie_names:
+            warnings.append(
+                f"YTDLP_COOKIEFILE at '{path}' has no youtube.com cookies. Make sure "
+                "you were logged into youtube.com (not just google.com) when you "
+                "exported it."
+            )
+        elif (
+            _LOGIN_MARKER_COOKIE not in youtube_cookie_names
+            or not (youtube_cookie_names & _AUTH_SID_COOKIES)
+        ):
+            # This is the gap a loose "has some youtube.com cookies" check
+            # misses: consent/region/visitor-id cookies are present on every
+            # visit, logged in or not, and would pass that check while
+            # yt-dlp's own is_authenticated still evaluates False — meaning
+            # it treats the session as anonymous and hits YouTube's sign-in
+            # wall exactly as if no cookiefile were configured at all.
+            warnings.append(
+                f"YTDLP_COOKIEFILE at '{path}' has youtube.com cookies, but not "
+                f"the ones yt-dlp uses to detect a logged-in session ('{_LOGIN_MARKER_COOKIE}' "
+                f"plus one of {sorted(_AUTH_SID_COOKIES)}). yt-dlp will treat this as an "
+                "anonymous session and hit YouTube's sign-in wall exactly as if no "
+                "cookiefile were set — this is a different problem than a missing or "
+                "stale file. Check you were actually signed into a Google account in "
+                "that browser (not just cookie-consent-accepted) when you exported, "
+                "and re-export after confirming that."
+            )
 
     if not os.access(file_path, os.W_OK):
         warnings.append(
