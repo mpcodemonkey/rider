@@ -51,15 +51,18 @@ class FakeVoiceClient:
         self.disconnected = True
 
 
-async def make_streamer(ended: asyncio.Event | None = None):
+async def make_streamer(ended: asyncio.Event | None = None, pacing_window_frames: int | None = None):
     voice = FakeVoiceClient()
 
     async def on_end(error):
         if ended is not None:
             ended.set()
 
+    kwargs = {}
+    if pacing_window_frames is not None:
+        kwargs["pacing_window_frames"] = pacing_window_frames
     streamer = AudioStreamer(
-        voice, ffmpeg_path=find_ffmpeg(), on_track_end=on_end
+        voice, ffmpeg_path=find_ffmpeg(), on_track_end=on_end, **kwargs
     )
     await streamer.start()
     return streamer, voice
@@ -236,3 +239,51 @@ async def test_close_returns_promptly_mid_playback(tones):
     started = asyncio.get_running_loop().time()
     await streamer.close()
     assert asyncio.get_running_loop().time() - started < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Pacing-lateness detection (diagnoses stuttering caused by host CPU
+# contention, distinguishing it from a LiveKit/transport-level issue)
+# ---------------------------------------------------------------------------
+async def test_pacing_lateness_is_detected_and_logged(tones, caplog):
+    """A deliberately stalled event loop (simulating CPU contention on the
+    host) must be caught and reported, not silently absorbed."""
+    import livekit.rtc as rtc
+
+    real_capture = rtc.AudioSource.capture_frame
+    calls = {"n": 0}
+
+    async def slow_capture_frame(self, frame):
+        calls["n"] += 1
+        if calls["n"] % 3 == 0:
+            await asyncio.sleep(0.04)  # twice the 20ms frame budget
+        return await real_capture(self, frame)
+
+    rtc.AudioSource.capture_frame = slow_capture_frame
+    try:
+        streamer, _ = await make_streamer(pacing_window_frames=20)
+        try:
+            with caplog.at_level("WARNING", logger="jockiefluxer.audio"):
+                await streamer.play(tones[10.0], is_local=True)
+                await asyncio.sleep(1.0)
+        finally:
+            await streamer.close()
+    finally:
+        rtc.AudioSource.capture_frame = real_capture
+
+    messages = [r.message for r in caplog.records]
+    assert any("fell behind schedule" in m for m in messages)
+    assert any("stuttering" in m for m in messages)
+
+
+async def test_pacing_lateness_does_not_false_positive_under_normal_playback(tones, caplog):
+    streamer, _ = await make_streamer(pacing_window_frames=20)
+    try:
+        with caplog.at_level("WARNING", logger="jockiefluxer.audio"):
+            await streamer.play(tones[10.0], is_local=True)
+            await asyncio.sleep(1.0)
+    finally:
+        await streamer.close()
+
+    messages = [r.message for r in caplog.records]
+    assert not any("fell behind schedule" in m for m in messages)

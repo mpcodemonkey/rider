@@ -34,6 +34,13 @@ SILENCE_FRAME = b"\x00" * BYTES_PER_FRAME
 # YouTube/SoundCloud streams without adding noticeable seek latency.
 PREBUFFER_FRAMES = 100
 
+# Pacing-lateness reporting window: ~5s of frames at 20ms each.
+_PACING_WINDOW_FRAMES = 250
+# Warn only if a meaningful fraction of the window ran behind schedule —
+# an occasional single late frame from normal scheduling jitter is not
+# worth logging about.
+_PACING_LATE_WARN_RATIO = 0.05
+
 # HTTP sources drop connections regularly; make ffmpeg retry instead of ending
 # the track early.
 _RECONNECT_ARGS = [
@@ -375,10 +382,12 @@ class AudioStreamer:
         *,
         ffmpeg_path: str = "ffmpeg",
         on_track_end: Callable[[Exception | None], Awaitable[None]] | None = None,
+        pacing_window_frames: int = _PACING_WINDOW_FRAMES,
     ) -> None:
         self._voice = voice_client
         self._ffmpeg_path = ffmpeg_path
         self._on_track_end = on_track_end
+        self._pacing_window_frames = pacing_window_frames
 
         self._source = None  # rtc.AudioSource, created on start()
         self._reader: FFmpegReader | None = None
@@ -395,6 +404,14 @@ class AudioStreamer:
         # Incremented whenever the reader is swapped, so a finishing reader
         # can't be mistaken for the current one.
         self._generation = 0
+
+        # Pacing-lateness tracking (see _run): counts frames sent behind
+        # schedule within a rolling window, so sustained lateness — the
+        # usual cause of audible stuttering — shows up in the logs instead
+        # of staying a guess about host load.
+        self._window_frames = 0
+        self._window_late_frames = 0
+        self._window_worst_late_ms = 0.0
 
     # -- properties ----------------------------------------------------
     @property
@@ -551,9 +568,34 @@ class AudioStreamer:
             if delay > 0:
                 await asyncio.sleep(delay)
             else:
-                # We fell behind (GC pause, slow disk); resync rather than
-                # sprinting to catch up and blowing out the LiveKit buffer.
+                # We fell behind (GC pause, slow disk, CPU contention on the
+                # host); resync rather than sprinting to catch up and
+                # blowing out the LiveKit buffer. Sustained lateness here is
+                # the usual cause of audible stuttering, so it's tracked and
+                # reported rather than silently absorbed every time.
+                self._window_late_frames += 1
+                self._window_worst_late_ms = max(self._window_worst_late_ms, -delay * 1000)
                 deadline = time.monotonic()
+
+            self._window_frames += 1
+            if self._window_frames >= self._pacing_window_frames:
+                late_ratio = self._window_late_frames / self._window_frames
+                if late_ratio > _PACING_LATE_WARN_RATIO:
+                    log.warning(
+                        "Audio frame pacing fell behind schedule: %d/%d frames "
+                        "(%.0f%%) sent late over the last %.1fs (worst: %.0fms "
+                        "late). This is the usual cause of audible stuttering "
+                        "and points at CPU contention on this host, not "
+                        "LiveKit itself — check what else is competing for CPU "
+                        "(ffmpeg, the PO token provider, other services).",
+                        self._window_late_frames, self._window_frames,
+                        late_ratio * 100,
+                        self._window_frames * FRAME_MS / 1000,
+                        self._window_worst_late_ms,
+                    )
+                self._window_frames = 0
+                self._window_late_frames = 0
+                self._window_worst_late_ms = 0.0
 
     async def _safe_track_end(self, error: Exception | None) -> None:
         assert self._on_track_end is not None

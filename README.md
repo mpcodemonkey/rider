@@ -382,6 +382,13 @@ picks up the fix. It happens because Docker creates `./data` owned by root on th
 (`pip install -U yt-dlp` / rebuild the image); extraction breaks whenever YouTube changes, and
 that is the usual cause.
 
+**Audio stutters or sounds glitchy** — this is very rarely LiveKit/WebRTC itself; it's the usual
+symptom of the frame-pacing loop falling behind its 20ms schedule, almost always because something
+on the host is eating CPU at the same time (ffmpeg decoding, the PO token provider, other
+services). Check the logs for `Audio frame pacing fell behind schedule` — the bot watches for this
+itself and reports it with real numbers (how often, how late) instead of leaving it a guess. If you
+see it, the fix is host-side: give the container more CPU, or run fewer things on the same box.
+
 **"Sign in to confirm you're not a bot"**, **"Requested format is not available"** — see
 [YouTube cookies, a JS runtime, and PO tokens](#youtube-cookies-a-js-runtime-and-po-tokens) above;
 "Requested format is not available" specifically covers *two* of the three things that section
