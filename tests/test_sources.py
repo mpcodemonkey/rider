@@ -665,3 +665,95 @@ def test_extract_sync_propagates_extract_info_failures_normally(config, monkeypa
     ytdlp = YTDLPSource(config)
     with pytest.raises(RuntimeError, match="network exploded"):
         ytdlp._extract_sync("some query", flat=False)
+
+
+# ---------------------------------------------------------------------------
+# Error/warning capture — surfacing *why*, not just the final failure
+# ---------------------------------------------------------------------------
+from jockiefluxer.sources.ytdlp import _ErrorCapture  # noqa: E402
+
+
+def test_error_capture_with_no_error_reports_nothing():
+    capture = _ErrorCapture()
+    capture.warning("some incidental warning")
+    assert capture.formatted_error() is None
+
+
+def test_error_capture_with_only_an_error_has_no_context_to_add():
+    capture = _ErrorCapture()
+    capture.error("ERROR: video unavailable")
+    assert capture.formatted_error() == "video unavailable"
+
+
+def test_error_capture_folds_recent_warnings_into_the_final_error():
+    """Regression: yt-dlp explains *why* formats disappeared (SABR, a
+    skipped client, a missing PO token) via report_warning, then raises a
+    generic "Requested format is not available" as the final error. Losing
+    the warnings loses the only part that actually explains anything.
+    """
+    capture = _ErrorCapture()
+    capture.warning("Some tv client https formats have been skipped: SABR streaming forced")
+    capture.warning('Skipping client "android" since it does not support cookies')
+    capture.error("ERROR: Requested format is not available")
+
+    result = capture.formatted_error()
+    assert result.startswith("Requested format is not available")
+    assert "SABR streaming forced" in result
+    assert "does not support cookies" in result
+
+
+def test_error_capture_summary_is_bounded_to_recent_warnings():
+    capture = _ErrorCapture()
+    for i in range(10):
+        capture.warning(f"warning number {i}")
+    capture.error("ERROR: final failure")
+
+    result = capture.formatted_error()
+    # Only the last 3 make it into the user-facing summary.
+    assert "warning number 9" in result
+    assert "warning number 8" in result
+    assert "warning number 7" in result
+    assert "warning number 6" not in result
+
+
+def test_error_capture_retention_is_bounded_even_for_huge_playlists():
+    """A flat-listing of a large playlist could emit one warning per dead
+    entry; retention must not grow unboundedly within a single capture."""
+    capture = _ErrorCapture()
+    for i in range(500):
+        capture.warning(f"entry {i} unavailable")
+    assert len(capture.warnings) <= 20
+
+
+def test_error_capture_does_not_duplicate_a_warning_that_matches_the_error():
+    capture = _ErrorCapture()
+    capture.warning("Requested format is not available")
+    capture.error("ERROR: Requested format is not available")
+    assert capture.formatted_error() == "Requested format is not available"
+
+
+async def test_extract_sync_surfaces_warning_context_through_to_the_caller(config):
+    """Full path: YoutubeDL's logger hook -> _ErrorCapture -> the tuple
+    _extract_sync actually returns, which is what load()/resolve_stream()
+    show the user.
+    """
+    import yt_dlp
+
+    def fake_extract_info(self, query, download=False):
+        logger = self.params["logger"]
+        logger.warning("SABR-only streaming experiment for the current session")
+        logger.error("ERROR: Requested format is not available")
+        return None
+
+    monkeypatch_target = yt_dlp.YoutubeDL.extract_info
+    yt_dlp.YoutubeDL.extract_info = fake_extract_info
+    try:
+        ytdlp = YTDLPSource(config)
+        info, error = ytdlp._extract_sync("some query", flat=False)
+    finally:
+        yt_dlp.YoutubeDL.extract_info = monkeypatch_target
+
+    assert info is None
+    assert error is not None
+    assert "Requested format is not available" in error
+    assert "SABR-only streaming experiment" in error

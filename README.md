@@ -373,6 +373,15 @@ missing. If `YTDLP_COOKIEFILE` is correctly set (the startup log confirms this) 
 `YTDLP_PLAYER_CLIENTS` (the default) and you're *still* blocked, that's the datacenter-IP case —
 set up the PO token provider described in that section.
 
+If you've done all of that and one specific video still won't play, check the actual error text
+the bot gives you (the reply in chat, or the log line) rather than treating "Requested format is
+not available" as the whole story — it now includes the more specific yt-dlp warnings that led up
+to it (e.g. a named client being skipped, or YouTube forcing SABR streaming for that client),
+which is usually enough to tell you whether this is the cookie/PO-token issue again or something
+video-specific. If it mentions SABR, that's a separate, currently-evolving YouTube-side rollout —
+adding more fallback clients to `YTDLP_PLAYER_CLIENTS` (e.g. `tv,web,mweb`) is worth trying, but
+there's no fixed answer for it yet; check the linked yt-dlp issue in the log for current status.
+
 **Commands are ignored** — the **Message Content** intent is almost always the reason. Confirm the
 prefix with an @mention: `@bot help` works regardless of prefix.
 

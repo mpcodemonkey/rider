@@ -228,6 +228,13 @@ def check_pot_provider(
     return problem
 
 
+#: Bound on retained warnings per extraction, so a huge flat playlist listing
+#: (many per-entry warnings) can't grow this unboundedly within one capture.
+_MAX_RETAINED_WARNINGS = 20
+#: How many of the most recent warnings to fold into the user-facing message.
+_WARNINGS_IN_SUMMARY = 3
+
+
 class _ErrorCapture:
     """A yt-dlp logger that keeps the last error instead of printing it.
 
@@ -235,10 +242,19 @@ class _ErrorCapture:
     playlist, but that also makes ``extract_info`` return ``None`` on hard
     failures.  Capturing the message lets the bot say *why* rather than
     reporting a bare "nothing found".
+
+    The *warning* channel matters as much as the error one here: yt-dlp
+    reports the specific reason a client's formats got dropped (e.g. "SABR
+    streaming forced for this client", "Skipping client X since it does not
+    support cookies") as warnings, then raises a generic "Requested format
+    is not available" as the final error. Keeping only the final error, as
+    an earlier version of this did, throws away the one piece of text that
+    actually explains what happened.
     """
 
     def __init__(self) -> None:
         self.last_error: str | None = None
+        self.warnings: list[str] = []
 
     def debug(self, message: str) -> None:
         pass
@@ -247,11 +263,27 @@ class _ErrorCapture:
         pass
 
     def warning(self, message: str) -> None:
-        log.debug("yt-dlp: %s", message)
+        text = str(message).replace("WARNING: ", "").strip()
+        if len(self.warnings) < _MAX_RETAINED_WARNINGS:
+            self.warnings.append(text)
+        log.debug("yt-dlp: %s", text)
 
     def error(self, message: str) -> None:
         self.last_error = str(message).replace("ERROR: ", "").strip()
         log.debug("yt-dlp error: %s", self.last_error)
+
+    def formatted_error(self) -> str | None:
+        """The final error, with recent warnings folded in as likely context.
+
+        Returns ``None`` if nothing was ever reported as an error — a bare
+        warning history without a terminal error isn't a failure by itself.
+        """
+        if not self.last_error:
+            return None
+        recent = [w for w in self.warnings[-_WARNINGS_IN_SUMMARY:] if w != self.last_error]
+        if not recent:
+            return self.last_error
+        return f"{self.last_error} (yt-dlp also reported: {'; '.join(recent)})"
 
 
 class YTDLPSource:
@@ -335,7 +367,7 @@ class YTDLPSource:
                     "usual cause is a read-only mount or ownership mismatch.",
                     self.config.ytdlp_cookiefile, exc,
                 )
-        return info, capture.last_error
+        return info, capture.formatted_error()
 
     async def _extract(
         self, query: str, *, flat: bool
