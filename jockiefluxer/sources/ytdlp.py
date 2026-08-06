@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -125,14 +126,10 @@ def validate_player_clients(clients: list[str]) -> list[str]:
     ]
 
 
-def check_pot_provider(base_url: str, timeout: float = 3.0) -> str | None:
-    """Ping a configured bgutil-ytdlp-pot-provider server.
+def _ping_pot_provider(base_url: str, timeout: float) -> str | None:
+    """One attempt at reaching a PO token provider's ``/ping`` endpoint.
 
-    Returns ``None`` if it responded and looks healthy, or a human-readable
-    problem description otherwise. This hits the same ``/ping`` endpoint the
-    yt-dlp plugin itself checks before every PO token request, so "reachable
-    here" really does mean "yt-dlp will be able to reach it too" — same
-    network path, same URL.
+    Returns ``None`` on success, or a human-readable problem description.
     """
     url = f"{base_url.rstrip('/')}/ping"
     try:
@@ -154,6 +151,35 @@ def check_pot_provider(base_url: str, timeout: float = 3.0) -> str | None:
 
     version = payload.get("version", "unknown")
     return None if version else f"PO token provider at '{base_url}' returned no version."
+
+
+def check_pot_provider(
+    base_url: str,
+    timeout: float = 3.0,
+    *,
+    retries: int = 4,
+    retry_delay: float = 2.0,
+    sleep: Any = time.sleep,
+) -> str | None:
+    """Ping a configured bgutil-ytdlp-pot-provider server, tolerating a slow
+    start.
+
+    ``docker-compose.yml``'s plain ``depends_on: [bgutil-pot-provider]`` only
+    guarantees Compose *started* that container before this one — it says
+    nothing about the server inside actually accepting connections yet, and
+    the image ships no ``HEALTHCHECK`` for Compose to wait on instead. A
+    single attempt right at boot can lose that race and report "connection
+    refused" for a server that finishes starting a second later, so this
+    retries a few times before giving up. Once yt-dlp actually needs a
+    token — well after boot — the server has always long since started.
+    """
+    problem = _ping_pot_provider(base_url, timeout)
+    attempt = 0
+    while problem is not None and attempt < retries:
+        sleep(retry_delay)
+        attempt += 1
+        problem = _ping_pot_provider(base_url, timeout)
+    return problem
 
 
 class _ErrorCapture:

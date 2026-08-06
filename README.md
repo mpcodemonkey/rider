@@ -232,6 +232,19 @@ on request. The Python-side plugin is already a dependency of this bot — insta
 require the sidecar to be running, it's a no-op until `YTDLP_POT_PROVIDER_URL` points at one. The
 startup log confirms reachability the same way it does for cookies.
 
+A `Could not reach the PO token provider ... Connection refused` warning in the first few seconds
+after `docker compose up` is usually just a cold-start race, not a real problem: the sidecar image
+ships no healthcheck for Compose to wait on, so `depends_on` only guarantees it was *started*
+before jockiefluxer, not that its server is accepting connections yet. jockiefluxer retries a few
+times with a short backoff before giving up, so this normally resolves itself within a handful of
+seconds without you doing anything. If the warning is still there well after startup, check the
+sidecar actually stayed up:
+
+```bash
+docker compose ps
+docker compose logs bgutil-pot-provider
+```
+
 ### Keeping cookies fresh without babysitting them
 
 You don't need to manually re-export `cookies.txt` on a schedule. yt-dlp writes any renewed

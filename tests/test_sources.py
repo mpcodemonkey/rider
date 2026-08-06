@@ -484,7 +484,9 @@ def test_check_pot_provider_reports_healthy_server():
 
 
 def test_check_pot_provider_reports_connection_refused():
-    problem = check_pot_provider("http://127.0.0.1:1", timeout=1.0)
+    # retries=0: this test is about the error message shape, not the retry
+    # behaviour (which has its own tests below) - no need to actually wait.
+    problem = check_pot_provider("http://127.0.0.1:1", timeout=1.0, retries=0)
     assert problem is not None
     assert "Could not reach" in problem
 
@@ -502,12 +504,70 @@ def test_check_pot_provider_reports_invalid_response_body():
     server, thread = _run_server(GarbageHandler)
     try:
         url = f"http://127.0.0.1:{server.server_address[1]}"
-        problem = check_pot_provider(url)
+        # retries=0: message-shape test, not retry orchestration.
+        problem = check_pot_provider(url, retries=0)
         assert problem is not None
         assert "not with the expected JSON" in problem
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Retry behaviour (real timing already verified manually against a genuine
+# delayed socket; these cover the orchestration logic deterministically)
+# ---------------------------------------------------------------------------
+def test_check_pot_provider_retries_until_the_server_comes_up(monkeypatch):
+    import jockiefluxer.sources.ytdlp as ytdlp_module
+
+    attempts = {"count": 0}
+
+    def flaky_ping(base_url, timeout):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return "not up yet"
+        return None
+
+    monkeypatch.setattr(ytdlp_module, "_ping_pot_provider", flaky_ping)
+
+    sleeps = []
+    result = check_pot_provider(
+        "http://bgutil-pot-provider:4416", retries=4, retry_delay=2.0,
+        sleep=sleeps.append,
+    )
+    assert result is None
+    assert attempts["count"] == 3
+    assert sleeps == [2.0, 2.0]  # slept between attempts 1->2 and 2->3, not after success
+
+
+def test_check_pot_provider_gives_up_after_exhausting_retries(monkeypatch):
+    import jockiefluxer.sources.ytdlp as ytdlp_module
+
+    monkeypatch.setattr(
+        ytdlp_module, "_ping_pot_provider", lambda base_url, timeout: "still down"
+    )
+
+    sleeps = []
+    result = check_pot_provider(
+        "http://bgutil-pot-provider:4416", retries=3, retry_delay=1.0,
+        sleep=sleeps.append,
+    )
+    assert result == "still down"
+    assert sleeps == [1.0, 1.0, 1.0]  # exactly `retries` sleeps, then stops
+
+
+def test_check_pot_provider_does_not_sleep_when_already_up(monkeypatch):
+    import jockiefluxer.sources.ytdlp as ytdlp_module
+
+    monkeypatch.setattr(ytdlp_module, "_ping_pot_provider", lambda base_url, timeout: None)
+
+    sleeps = []
+    result = check_pot_provider(
+        "http://bgutil-pot-provider:4416", retries=4, retry_delay=99.0,
+        sleep=sleeps.append,
+    )
+    assert result is None
+    assert sleeps == []
 
 
 # ---------------------------------------------------------------------------

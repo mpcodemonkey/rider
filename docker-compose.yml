@@ -17,7 +17,13 @@ services:
       # fixes ownership on start, same as it does for ./data.
       # - ./cookies.txt:/config/cookies.txt
     # Uncomment if you're running the PO token provider below - lets
-    # YTDLP_POT_PROVIDER_URL use the service name instead of an IP.
+    # YTDLP_POT_PROVIDER_URL use the service name instead of an IP. Note
+    # this only guarantees Compose *starts* bgutil-pot-provider first, not
+    # that its server is accepting connections yet — the image ships no
+    # HEALTHCHECK for a stronger `condition: service_healthy` to wait on.
+    # jockiefluxer's own startup check retries for this, so a "Connection
+    # refused" in the very first few seconds of `docker compose up` is a
+    # normal cold-start race, not a misconfiguration - it resolves itself.
     # depends_on:
     #   - bgutil-pot-provider
 

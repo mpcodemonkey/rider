@@ -81,6 +81,13 @@ def _check_player_clients(config: Config) -> None:
 def _check_pot_provider(config: Config) -> None:
     """Ping a configured PO token provider so a wrong URL/unstarted server
     shows up as a startup log line instead of a mid-session extraction error.
+
+    Retries with a short backoff (check_pot_provider's defaults) rather than
+    failing on the first attempt: Compose's plain `depends_on` only
+    guarantees the sidecar container was *started* before this one, not that
+    its HTTP server is accepting connections yet, and the bgutil image ships
+    no HEALTHCHECK for Compose to wait on instead. A cold start losing that
+    race for a second is normal, not a real misconfiguration.
     """
     if not config.ytdlp_pot_provider_url:
         return
